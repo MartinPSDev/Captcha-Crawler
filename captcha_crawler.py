@@ -45,11 +45,14 @@ class CaptchaCrawler:
     
     def __init__(self, headless: bool = True, timeout: int = 30):
         self.headless = headless
-        self.timeout = timeout * 1000  # Convertir a milisegundos
+        self.timeout = timeout * 1000  
         self.browser = None
         self.context = None
         self.page = None
         self.visited_urls = set()
+        self.max_pages = 50  # Máximo de páginas a visitar
+        self.captcha_found = False
+        self.captcha_solved = False
         
         # Patrones de CAPTCHA comunes
         self.captcha_patterns = [
@@ -79,6 +82,97 @@ class CaptchaCrawler:
         ]
         
         logger.info("CaptchaCrawler inicializado")
+    
+    def normalize_url(self, url: str) -> str:
+        """Normalizar URL agregando protocolo si es necesario"""
+        url = url.strip()
+        if not url.startswith(('http://', 'https://')):
+            # Agregar https por defecto
+            url = 'https://' + url
+        return url
+    
+    def is_same_domain(self, url1: str, url2: str) -> bool:
+        """Verificar si dos URLs pertenecen al mismo dominio"""
+        try:
+            domain1 = urlparse(url1).netloc.lower()
+            domain2 = urlparse(url2).netloc.lower()
+            return domain1 == domain2
+        except:
+            return False
+    
+    async def interact_with_page(self) -> bool:
+        """Interactuar con elementos de la página para activar posibles CAPTCHAs"""
+        try:
+            # Buscar y hacer clic en botones comunes
+            button_selectors = [
+                'button[type="submit"]',
+                'input[type="submit"]',
+                'button:contains("Siguiente")',
+                'button:contains("Next")',
+                'button:contains("Continuar")',
+                'button:contains("Continue")',
+                'button:contains("Ver más")',
+                'button:contains("Load more")',
+                'a:contains("Siguiente")',
+                'a:contains("Next")',
+                '.btn',
+                '.button',
+                '[role="button"]'
+            ]
+            
+            for selector in button_selectors:
+                try:
+                    elements = await self.page.query_selector_all(selector)
+                    if elements:
+                        # Hacer clic en el primer botón visible
+                        for element in elements[:3]:  # Máximo 3 botones
+                            if await element.is_visible():
+                                await element.scroll_into_view_if_needed()
+                                await asyncio.sleep(random.uniform(0.5, 1.0))
+                                await element.click()
+                                await asyncio.sleep(random.uniform(1, 2))
+                                
+                                # Verificar si apareció un CAPTCHA después del clic
+                                if await self.detect_captcha():
+                                    return True
+                                break
+                except Exception:
+                    continue
+            
+            # Scroll por la página para cargar contenido dinámico
+            await self.page.evaluate("window.scrollTo(0, document.body.scrollHeight/2)")
+            await asyncio.sleep(1)
+            await self.page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+            await asyncio.sleep(1)
+            
+            return False
+            
+        except Exception as e:
+            logger.error(f"Error interactuando con la página: {e}")
+            return False
+    
+    async def get_page_links(self, base_url: str) -> List[str]:
+        """Obtener enlaces de la página actual que pertenezcan al mismo dominio"""
+        try:
+            links = await self.page.query_selector_all('a[href]')
+            valid_links = []
+            
+            for link in links:
+                href = await link.get_attribute('href')
+                if href:
+                    full_url = urljoin(self.page.url, href)
+                    
+                    # Filtrar enlaces válidos del mismo dominio
+                    if (self.is_same_domain(full_url, base_url) and 
+                        full_url not in self.visited_urls and
+                        not any(ext in full_url.lower() for ext in ['.pdf', '.jpg', '.png', '.gif', '.zip', '.doc'])):
+                        valid_links.append(full_url)
+            
+            return valid_links[:10]  # Limitar a 10 enlaces por página
+            
+        except Exception as e:
+            logger.error(f"Error obteniendo enlaces: {e}")
+            return []
     
     async def start_browser(self):
         """Inicializar el navegador Playwright"""
@@ -237,7 +331,14 @@ class CaptchaCrawler:
             # Verificar si el CAPTCHA fue superado
             await asyncio.sleep(3)
             if not await self.detect_captcha():
-                logger.info("CAPTCHA superado exitosamente")
+                self.captcha_solved = True
+                print("\n" + "="*60)
+                print("🎉 ¡CAPTCHA SUPERADO EXITOSAMENTE! 🎉")
+                print("="*60)
+                print(f"✅ URL: {url}")
+                print(f"✅ Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+                print("="*60 + "\n")
+                logger.info("CAPTCHA superado exitosamente - OBJETIVO COMPLETADO")
                 return True
             else:
                 logger.warning("CAPTCHA aún presente después del intento")
@@ -372,14 +473,18 @@ class CaptchaCrawler:
             logger.error(f"Error extrayendo información de la página: {e}")
             return {'error': str(e)}
     
-    async def crawl_url(self, url: str) -> Dict[str, Any]:
-        """Función principal para crawlear una URL"""
+    async def crawl_site_for_captcha(self, start_url: str) -> Dict[str, Any]:
+        """Navegar por el sitio automáticamente buscando CAPTCHAs"""
+        start_url = self.normalize_url(start_url)
+        
         result = {
-            'url': url,
+            'start_url': start_url,
             'success': False,
             'timestamp': datetime.now().isoformat(),
-            'captcha_detected': False,
-            'captcha_solved': False
+            'captcha_found': False,
+            'captcha_solved': False,
+            'pages_visited': 0,
+            'visited_urls': []
         }
         
         try:
@@ -387,39 +492,103 @@ class CaptchaCrawler:
             if not self.browser:
                 await self.start_browser()
             
-            # Navegar a la URL
-            if await self.navigate_to_url(url):
-                result['success'] = True
-                
-                # Detectar CAPTCHA final
-                result['captcha_detected'] = await self.detect_captcha()
-                result['captcha_solved'] = not result['captcha_detected']
-                
-                # Extraer información de la página
-                page_info = await self.extract_page_info()
-                result.update(page_info)
-                
-                logger.info(f"Crawl exitoso de {url}")
-            else:
-                result['error'] = 'Failed to navigate to URL'
-                logger.error(f"Falló el crawl de {url}")
+            print(f"\n🚀 Iniciando búsqueda de CAPTCHAs en: {start_url}")
+            print("🔍 Navegando automáticamente por el sitio...\n")
             
+            # Cola de URLs por visitar
+            urls_to_visit = [start_url]
+            
+            while urls_to_visit and len(self.visited_urls) < self.max_pages and not self.captcha_solved:
+                current_url = urls_to_visit.pop(0)
+                
+                if current_url in self.visited_urls:
+                    continue
+                
+                print(f"📄 Visitando página {len(self.visited_urls) + 1}: {current_url}")
+                
+                # Navegar a la URL actual
+                if await self.navigate_to_url(current_url):
+                    result['pages_visited'] += 1
+                    result['visited_urls'].append(current_url)
+                    
+                    # Verificar si hay CAPTCHA inmediatamente
+                    if await self.detect_captcha():
+                        print(f"🎯 ¡CAPTCHA encontrado en: {current_url}!")
+                        result['captcha_found'] = True
+                        self.captcha_found = True
+                        
+                        # Intentar superar el CAPTCHA
+                        if await self.handle_captcha(current_url):
+                            result['captcha_solved'] = True
+                            result['success'] = True
+                            return result  # Salir inmediatamente cuando se supere el CAPTCHA
+                        else:
+                            print("❌ No se pudo superar el CAPTCHA, continuando búsqueda...")
+                    
+                    # Si no hay CAPTCHA, interactuar con la página para activar posibles CAPTCHAs
+                    if not self.captcha_found:
+                        print("   🔄 Interactuando con elementos de la página...")
+                        if await self.interact_with_page():
+                            print(f"🎯 ¡CAPTCHA activado por interacción en: {current_url}!")
+                            result['captcha_found'] = True
+                            self.captcha_found = True
+                            
+                            # Intentar superar el CAPTCHA
+                            if await self.handle_captcha(current_url):
+                                result['captcha_solved'] = True
+                                result['success'] = True
+                                return result  # Salir inmediatamente cuando se supere el CAPTCHA
+                            else:
+                                print("❌ No se pudo superar el CAPTCHA activado, continuando búsqueda...")
+                    
+                    # Si aún no hay CAPTCHA, obtener más enlaces para continuar navegando
+                    if not self.captcha_found:
+                        new_links = await self.get_page_links(start_url)
+                        for link in new_links:
+                            if link not in urls_to_visit and link not in self.visited_urls:
+                                urls_to_visit.append(link)
+                        
+                        print(f"   ➡️  Encontrados {len(new_links)} enlaces adicionales")
+                    
+                    # Pausa entre páginas
+                    await asyncio.sleep(random.uniform(1, 3))
+                else:
+                    print(f"   ❌ Error navegando a: {current_url}")
+            
+            # Resultados finales
+            if self.captcha_solved:
+                result['success'] = True
+                print(f"\n✅ Misión completada: CAPTCHA encontrado y superado")
+            elif self.captcha_found:
+                print(f"\n⚠️  CAPTCHA encontrado pero no superado")
+            else:
+                print(f"\n🔍 No se encontraron CAPTCHAs en {result['pages_visited']} páginas visitadas")
+                print("💡 Esto puede significar que el sitio no tiene CAPTCHAs o están en secciones protegidas")
+            
+        except KeyboardInterrupt:
+            print("\n⏹️  Búsqueda interrumpida por el usuario")
+            result['error'] = 'Interrupted by user'
         except Exception as e:
             result['error'] = str(e)
-            logger.error(f"Error en crawl de {url}: {e}")
+            logger.error(f"Error en crawl del sitio: {e}")
         
         return result
+    
+    async def crawl_url(self, url: str) -> Dict[str, Any]:
+        """Función de compatibilidad - redirige al nuevo método de búsqueda"""
+        return await self.crawl_site_for_captcha(url)
 
 async def main():
     """Función principal para uso desde línea de comandos"""
     import argparse
     
-    parser = argparse.ArgumentParser(description='CAPTCHA Crawler - Navegador web con capacidad de superar CAPTCHAs')
-    parser.add_argument('url', help='URL a navegar')
+    parser = argparse.ArgumentParser(description='CAPTCHA Crawler - Navegador automático que busca y supera CAPTCHAs')
+    parser.add_argument('url', help='URL inicial para comenzar la búsqueda (acepta example.com o https://example.com)')
     parser.add_argument('--headless', action='store_true', default=True, help='Ejecutar en modo headless (por defecto)')
     parser.add_argument('--visible', action='store_true', help='Ejecutar con navegador visible')
     parser.add_argument('--timeout', type=int, default=30, help='Timeout en segundos (por defecto: 30)')
     parser.add_argument('--output', help='Archivo para guardar resultados JSON')
+    parser.add_argument('--max-pages', type=int, default=50, help='Máximo número de páginas a visitar (por defecto: 50)')
     
     args = parser.parse_args()
     
@@ -427,28 +596,42 @@ async def main():
     headless = args.headless and not args.visible
     
     crawler = CaptchaCrawler(headless=headless, timeout=args.timeout)
+    crawler.max_pages = args.max_pages
     
     try:
         logger.info(f"Iniciando crawl de {args.url}")
         result = await crawler.crawl_url(args.url)
         
-        # Mostrar resultados
-        print("\n" + "="*50)
-        print("RESULTADOS DEL CRAWL")
-        print("="*50)
-        print(f"URL: {result['url']}")
-        print(f"Éxito: {result['success']}")
-        print(f"CAPTCHA detectado: {result['captcha_detected']}")
-        print(f"CAPTCHA resuelto: {result['captcha_solved']}")
+        # Mostrar resultados finales
+        print("\n" + "="*60)
+        print("📊 RESUMEN DE LA BÚSQUEDA DE CAPTCHAS")
+        print("="*60)
+        print(f"🌐 URL inicial: {result['start_url']}")
+        print(f"📄 Páginas visitadas: {result['pages_visited']}")
+        print(f"🎯 CAPTCHA encontrado: {'✅ SÍ' if result['captcha_found'] else '❌ NO'}")
+        print(f"🏆 CAPTCHA superado: {'✅ SÍ' if result['captcha_solved'] else '❌ NO'}")
+        print(f"✅ Misión exitosa: {'✅ SÍ' if result['success'] else '❌ NO'}")
         
-        if 'title' in result:
-            print(f"Título: {result['title']}")
-        if 'links' in result:
-            print(f"Enlaces encontrados: {len(result['links'])}")
-        if 'forms' in result:
-            print(f"Formularios encontrados: {result['forms']}")
+        if result['pages_visited'] > 0:
+            print(f"\n📋 URLs visitadas:")
+            for i, url in enumerate(result['visited_urls'][:10], 1):  # Mostrar máximo 10
+                print(f"   {i}. {url}")
+            if len(result['visited_urls']) > 10:
+                print(f"   ... y {len(result['visited_urls']) - 10} más")
+        
         if 'error' in result:
-            print(f"Error: {result['error']}")
+            print(f"\n❌ Error: {result['error']}")
+        
+        if result['captcha_solved']:
+            print("\n🎉 ¡OBJETIVO COMPLETADO! El programa encontró y superó un CAPTCHA.")
+        elif result['captcha_found']:
+            print("\n⚠️  Se encontró un CAPTCHA pero no se pudo superar automáticamente.")
+        else:
+            print("\n🔍 No se encontraron CAPTCHAs en las páginas exploradas.")
+            print("💡 Sugerencias:")
+            print("   - Intenta con un sitio diferente")
+            print("   - Algunos CAPTCHAs aparecen solo después de ciertas acciones")
+            print("   - Usa --visible para ver el navegador en acción")
         
         # Guardar resultados si se especifica archivo
         if args.output:
