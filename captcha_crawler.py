@@ -610,7 +610,6 @@ async def main():
         print(f"📄 Páginas visitadas: {result['pages_visited']}")
         print(f"🎯 CAPTCHA encontrado: {'✅ SÍ' if result['captcha_found'] else '❌ NO'}")
         print(f"🏆 CAPTCHA superado: {'✅ SÍ' if result['captcha_solved'] else '❌ NO'}")
-        print(f"✅ Misión exitosa: {'✅ SÍ' if result['success'] else '❌ NO'}")
         
         if result['pages_visited'] > 0:
             print(f"\n📋 URLs visitadas:")
