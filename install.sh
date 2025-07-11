@@ -1,39 +1,31 @@
 #!/bin/bash
 
-echo "🚀 Instalando CAPTCHA Crawler (Versión Segura)..."
-echo "================================================"
+# Instalador corregido para problemas de ensurepip
+echo "🚀 Instalando CAPTCHA Crawler (Versión Corregida)..."
+echo "==================================================="
 
 # Función para limpiar con timeout
 safe_cleanup() {
     echo "🧹 Limpiando entorno virtual..."
     
-    # Verificar si existe
     if [ ! -d "venv" ]; then
         echo "✅ No hay entorno virtual previo"
         return 0
     fi
     
-    # Intentar matar procesos que puedan estar usando el directorio
-    echo "🔧 Cerrando procesos Python..."
     killall python3 2>/dev/null || true
-    sleep 2
+    sleep 1
     
-    # Intentar eliminar con timeout
-    echo "🗑️  Eliminando directorio venv..."
     timeout 30 rm -rf venv 2>/dev/null || {
-        echo "⚠️  Limpieza normal falló, intentando método alternativo..."
-        
-        # Método alternativo: renombrar y eliminar en background
+        echo "⚠️  Limpieza normal falló, usando método alternativo..."
         if [ -d "venv" ]; then
             mv venv "venv_old_$(date +%s)" 2>/dev/null || true
             rm -rf venv_old_* &
         fi
     }
     
-    # Verificar que se eliminó
     if [ -d "venv" ]; then
         echo "❌ No se pudo eliminar completamente el entorno virtual"
-        echo "💡 Prueba: sudo rm -rf venv"
         return 1
     fi
     
@@ -50,7 +42,6 @@ fi
 # Verificar Python
 if ! command -v python3 &> /dev/null; then
     echo "❌ Python 3 no está instalado"
-    echo "💡 Ejecuta: sudo apt update && sudo apt install python3 python3-pip python3-venv"
     exit 1
 fi
 
@@ -58,17 +49,29 @@ fi
 PYTHON_VERSION=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null)
 echo "✅ Python $PYTHON_VERSION detectado"
 
-# Instalar dependencias del sistema si es necesario
+# Instalar dependencias específicas para el problema de ensurepip
 if command -v apt-get &> /dev/null; then
     echo "📦 Instalando dependencias del sistema..."
     sudo apt-get update -qq
-    sudo apt-get install -y python3-pip python3-venv python3-dev build-essential
+    
+    # Instalar paquetes necesarios para resolver el problema de ensurepip
+    sudo apt-get install -y \
+        python3-pip \
+        python3-venv \
+        python3-dev \
+        python3-setuptools \
+        python3-wheel \
+        build-essential \
+        curl \
+        wget
+    
+    echo "✅ Dependencias del sistema instaladas"
 fi
 
-# Crear entorno virtual con validación
-echo "📦 Creando entorno virtual..."
-if ! python3 -m venv venv --prompt="captcha-crawler"; then
-    echo "❌ Error creando entorno virtual"
+# Crear entorno virtual SIN pip automático (evita el error de ensurepip)
+echo "📦 Creando entorno virtual sin pip..."
+if ! python3 -m venv venv --without-pip --prompt="captcha-crawler"; then
+    echo "❌ Error creando entorno virtual sin pip"
     exit 1
 fi
 
@@ -92,9 +95,21 @@ fi
 
 echo "✅ Entorno virtual activado"
 
+# Instalar pip manualmente en el entorno virtual
+echo "🔧 Instalando pip manualmente..."
+curl -sS https://bootstrap.pypa.io/get-pip.py | python
+
+# Verificar que pip esté disponible
+if ! command -v pip &> /dev/null; then
+    echo "❌ Pip no está disponible después de la instalación"
+    exit 1
+fi
+
+echo "✅ Pip instalado correctamente"
+
 # Actualizar pip
 echo "⬆️  Actualizando pip..."
-pip install --upgrade pip -q
+pip install --upgrade pip
 
 # Verificar requirements.txt
 if [ ! -f "requirements.txt" ]; then
@@ -102,30 +117,67 @@ if [ ! -f "requirements.txt" ]; then
     exit 1
 fi
 
-# Instalar dependencias
-echo "📚 Instalando dependencias..."
+# Instalar dependencias de Python
+echo "📚 Instalando dependencias de Python..."
 pip install -r requirements.txt
 
+# Instalar dependencias específicas de Playwright para el sistema
+echo "🔧 Instalando dependencias de Playwright..."
+if command -v apt-get &> /dev/null; then
+    sudo apt-get install -y \
+        libnss3-dev \
+        libatk-bridge2.0-dev \
+        libdrm2 \
+        libxkbcommon0 \
+        libgtk-3-dev \
+        libgbm1 \
+        libasound2-dev \
+        libxss1 \
+        libgconf-2-4 \
+        xvfb
+fi
+
 # Instalar navegadores de Playwright
-echo "🌐 Instalando navegadores..."
+echo "🌐 Instalando navegadores de Playwright..."
 python -m playwright install chromium
 
 # Verificación final
 echo "🔍 Verificando instalación..."
 python -c "
-import playwright
-print('✅ Playwright OK')
-import httpx
-print('✅ httpx OK')
-print('🎉 Instalación completada exitosamente')
+try:
+    import playwright
+    print('✅ Playwright OK')
+    import httpx
+    print('✅ httpx OK')
+    import aiofiles
+    print('✅ aiofiles OK')
+    from bs4 import BeautifulSoup
+    print('✅ BeautifulSoup OK')
+    print('🎉 Todas las dependencias instaladas correctamente')
+except ImportError as e:
+    print(f'❌ Error: {e}')
+    exit(1)
 "
 
 echo ""
-echo "🎉 ¡Listo para usar!"
-echo "==================="
+echo "🎉 ¡Instalación completada exitosamente!"
+echo "======================================="
 echo ""
-echo "Para activar el entorno:"
-echo "source venv/bin/activate"
+echo "Para usar el crawler:"
+echo "1. Activa el entorno virtual:"
+echo "   source venv/bin/activate"
 echo ""
-echo "Para desactivar:"
-echo "deactivate"
+echo "2. Ejecuta el crawler:"
+echo "   python3 captcha_crawler.py <URL>"
+echo ""
+echo "3. Para desactivar el entorno:"
+echo "   deactivate"
+echo ""
+echo "📝 Ejemplos de uso:"
+echo "   python3 captcha_crawler.py https://example.com"
+echo "   python3 captcha_crawler.py https://example.com --visible"
+echo ""
+echo "🔧 En caso de problemas:"
+echo "   - Reactiva el entorno: source venv/bin/activate"
+echo "   - Verifica pip: pip --version"
+echo "   - Lista paquetes: pip list"
