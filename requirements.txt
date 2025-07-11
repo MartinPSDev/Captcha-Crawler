@@ -1,0 +1,22 @@
+# Dependencias para CAPTCHA Crawler
+# Instalar con: pip install -r requirements.txt
+
+# Playwright para automatización del navegador
+playwright>=1.40.0
+
+# Cliente HTTP asíncrono
+httpx>=0.25.0
+
+# Utilidades adicionales
+aiofiles>=23.0.0
+beautifulsoup4>=4.12.0
+lxml>=4.9.0
+
+# Para manejo de imágenes (opcional, para análisis de CAPTCHAs)
+Pillow>=10.0.0
+
+# Para logging avanzado (opcional)
+coloredlogs>=15.0.0
+
+# Para análisis de texto (opcional)
+requests>=2.31.0
