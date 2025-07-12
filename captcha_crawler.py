@@ -103,6 +103,385 @@ class CaptchaCrawler:
     async def interact_with_page(self) -> bool:
         """Interactuar con elementos de la página para activar posibles CAPTCHAs"""
         try:
+            # Primero intentar navegación profunda en e-commerce
+            if await self.deep_ecommerce_navigation():
+                return True
+            
+            # Si no es e-commerce o no se encontró CAPTCHA, usar navegación estándar
+            return await self.standard_page_interaction()
+            
+        except Exception as e:
+            logger.error(f"Error interactuando con la página: {e}")
+            return False
+    
+    async def deep_ecommerce_navigation(self) -> bool:
+        """Navegación profunda específica para sitios de e-commerce"""
+        try:
+            page_content = await self.page.content()
+            ecommerce_indicators = [
+                'product', 'precio', 'price', 'cart', 'carrito', 'shop', 'tienda',
+                'buy', 'comprar', 'add to cart', 'añadir al carrito', 'checkout'
+            ]
+            
+            is_ecommerce = any(indicator in page_content.lower() for indicator in ecommerce_indicators)
+            
+            if not is_ecommerce:
+                return False
+            
+            logger.info("Sitio de e-commerce detectado, iniciando navegación profunda")
+            
+            # 1. Buscar y hacer clic en tarjetas de productos
+            product_selectors = [
+                '.product-card', '.product-item', '.product', '.item-card',
+                '[data-product]', '.card', '.listing-item', '.product-tile',
+                'article[class*="product"]', 'div[class*="product"]',
+                'a[href*="product"]', 'a[href*="item"]'
+            ]
+            
+            products_clicked = 0
+            for selector in product_selectors:
+                try:
+                    products = await self.page.query_selector_all(selector)
+                    if products and products_clicked < 3:  # Máximo 3 productos
+                        for product in products[:3]:
+                            if await product.is_visible() and products_clicked < 3:
+                                await product.scroll_into_view_if_needed()
+                                await asyncio.sleep(random.uniform(1, 2))
+                                
+                                # Simular hover antes del clic
+                                await product.hover()
+                                await asyncio.sleep(random.uniform(0.5, 1))
+                                
+                                await product.click()
+                                products_clicked += 1
+                                
+                                # Esperar a que cargue la página del producto
+                                await asyncio.sleep(random.uniform(2, 4))
+                                
+                                # Verificar CAPTCHA después de cada clic
+                                if await self.detect_captcha():
+                                    return True
+                                
+                                # Simular lectura del producto
+                                await self.simulate_product_reading()
+                                
+                                # Verificar CAPTCHA después de la interacción
+                                if await self.detect_captcha():
+                                    return True
+                                
+                                # Volver atrás
+                                await self.page.go_back()
+                                await asyncio.sleep(random.uniform(1, 2))
+                                
+                                break
+                except Exception:
+                    continue
+            
+            # 2. Buscar paginación y navegar
+            await self.navigate_pagination()
+            
+            # 3. Interactuar con filtros si existen
+            await self.interact_with_filters()
+            
+            return False
+            
+        except Exception as e:
+            logger.error(f"Error en navegación profunda de e-commerce: {e}")
+            return False
+    
+    async def simulate_product_reading(self):
+        """Simular lectura de página de producto"""
+        try:
+            # Scroll gradual por la página del producto
+            scroll_positions = [0.2, 0.4, 0.6, 0.8, 1.0]
+            for position in scroll_positions:
+                await self.page.evaluate(f"window.scrollTo(0, document.body.scrollHeight * {position})")
+                await asyncio.sleep(random.uniform(1, 2))
+            
+            tab_selectors = [
+                '.tab', '.tabs a', '[role="tab"]', '.product-tab',
+                'a[href*="#"]', '.nav-tabs a'
+            ]
+            
+            for selector in tab_selectors:
+                try:
+                    tabs = await self.page.query_selector_all(selector)
+                    if tabs:
+                        for tab in tabs[:2]:  # Máximo 2 tabs
+                            if await tab.is_visible():
+                                await tab.click()
+                                await asyncio.sleep(random.uniform(1, 2))
+                                break
+                        break
+                except Exception:
+                    continue
+            
+            # Simular interacción con botones de cantidad o variantes
+            interaction_selectors = [
+                '.quantity-selector', '.size-selector', '.color-selector',
+                'select[name*="quantity"]', 'select[name*="size"]',
+                '.variant-selector', '.option-selector'
+            ]
+            
+            for selector in interaction_selectors:
+                try:
+                    element = await self.page.query_selector(selector)
+                    if element and await element.is_visible():
+                        await element.click()
+                        await asyncio.sleep(random.uniform(0.5, 1))
+                        break
+                except Exception:
+                    continue
+                    
+        except Exception as e:
+            logger.error(f"Error simulando lectura de producto: {e}")
+    
+    async def navigate_pagination(self):
+        """Navegar por páginas de resultados"""
+        try:
+            pagination_selectors = [
+                '.pagination a', '.pager a', '.page-numbers a',
+                'a[aria-label*="Next"]', 'a[aria-label*="Siguiente"]',
+                '.next-page', '.page-next', '[data-page]'
+            ]
+            
+            for selector in pagination_selectors:
+                try:
+                    next_buttons = await self.page.query_selector_all(selector)
+                    if next_buttons:
+                        for button in next_buttons:
+                            button_text = await button.inner_text()
+                            if any(text in button_text.lower() for text in ['next', 'siguiente', '>', '»']):
+                                if await button.is_visible():
+                                    await button.scroll_into_view_if_needed()
+                                    await asyncio.sleep(random.uniform(1, 2))
+                                    await button.click()
+                                    await asyncio.sleep(random.uniform(2, 3))
+                                    return
+                except Exception:
+                    continue
+                    
+        except Exception as e:
+            logger.error(f"Error navegando paginación: {e}")
+    
+    async def interact_with_filters(self):
+        """Interactuar con filtros de búsqueda"""
+        try:
+            filter_selectors = [
+                '.filter', '.filters input', '.sidebar input[type="checkbox"]',
+                '.facet input', '.search-filter', '.category-filter'
+            ]
+            
+            filters_clicked = 0
+            for selector in filter_selectors:
+                try:
+                    filters = await self.page.query_selector_all(selector)
+                    if filters and filters_clicked < 2:  
+                        for filter_elem in filters[:2]:
+                            if await filter_elem.is_visible() and filters_clicked < 2:
+                                await filter_elem.scroll_into_view_if_needed()
+                                await asyncio.sleep(random.uniform(0.5, 1))
+                                await filter_elem.click()
+                                filters_clicked += 1
+                                await asyncio.sleep(random.uniform(1, 2))
+                                break
+                except Exception:
+                    continue
+                    
+        except Exception as e:
+            logger.error(f"Error interactuando con filtros: {e}")
+    
+    async def deep_page_exploration(self, url: str):
+        """Exploración profunda de la página actual para activar CAPTCHAs"""
+        try:
+            logger.info(f"Iniciando exploración profunda en: {url}")
+            
+            await self.comprehensive_page_scroll()
+            
+            captcha_found = await self.interact_with_page()
+            if captcha_found:
+                return
+            
+            await self.explore_forms()
+            
+            if await self.detect_captcha():
+                return
+            
+            await self.interact_with_media()
+            
+            # Simular actividad de usuario prolongada
+            await self.simulate_extended_user_activity()
+            
+            # Intentar activar contenido dinámico
+            await self.trigger_dynamic_content()
+            
+            logger.info("Exploración profunda completada")
+            
+        except Exception as e:
+            logger.error(f"Error en exploración profunda: {e}")
+    
+    async def comprehensive_page_scroll(self):
+        """Scroll completo y realista de la página"""
+        try:
+            # Obtener altura total de la página
+            page_height = await self.page.evaluate("document.body.scrollHeight")
+            viewport_height = await self.page.evaluate("window.innerHeight")
+            
+            # Scroll gradual hacia abajo
+            current_position = 0
+            scroll_step = viewport_height // 3
+            
+            while current_position < page_height:
+                await self.page.evaluate(f"window.scrollTo(0, {current_position})")
+                await asyncio.sleep(random.uniform(1, 2.5))
+                current_position += scroll_step
+            
+            # Scroll hasta el final
+            await self.page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+            await asyncio.sleep(random.uniform(2, 3))
+            
+            # Scroll de vuelta hacia arriba (comportamiento humano)
+            for position in [0.8, 0.6, 0.4, 0.2, 0]:
+                await self.page.evaluate(f"window.scrollTo(0, document.body.scrollHeight * {position})")
+                await asyncio.sleep(random.uniform(1, 2))
+                
+        except Exception as e:
+            logger.error(f"Error en scroll comprensivo: {e}")
+    
+    async def explore_forms(self):
+        """Explorar y llenar formularios para activar CAPTCHAs"""
+        try:
+            forms = await self.page.query_selector_all('form')
+            
+            for form in forms[:2]:  # Máximo 2 formularios
+                try:
+                    # Buscar campos de entrada
+                    inputs = await form.query_selector_all('input[type="text"], input[type="email"], textarea')
+                    
+                    for input_field in inputs[:3]:  # Máximo 3 campos por formulario
+                        if await input_field.is_visible():
+                            await input_field.scroll_into_view_if_needed()
+                            await asyncio.sleep(random.uniform(0.5, 1))
+                            
+                            # Simular escritura lenta
+                            test_text = "test@example.com" if "email" in str(await input_field.get_attribute('type')) else "test text"
+                            await input_field.click()
+                            await asyncio.sleep(random.uniform(0.5, 1))
+                            
+                            for char in test_text:
+                                await input_field.type(char)
+                                await asyncio.sleep(random.uniform(0.1, 0.3))
+                            
+                            await asyncio.sleep(random.uniform(1, 2))
+                            
+                            # Verificar si apareció CAPTCHA
+                            if await self.detect_captcha():
+                                return
+                                
+                except Exception:
+                    continue
+                    
+        except Exception as e:
+            logger.error(f"Error explorando formularios: {e}")
+    
+    async def interact_with_media(self):
+        """Interactuar con elementos multimedia"""
+        try:
+            # Buscar videos
+            videos = await self.page.query_selector_all('video')
+            for video in videos[:2]:
+                try:
+                    if await video.is_visible():
+                        await video.scroll_into_view_if_needed()
+                        await asyncio.sleep(random.uniform(1, 2))
+                        await video.click()
+                        await asyncio.sleep(random.uniform(2, 3))
+                        break
+                except Exception:
+                    continue
+            
+            # Buscar iframes (pueden contener CAPTCHAs)
+            iframes = await self.page.query_selector_all('iframe')
+            for iframe in iframes[:3]:
+                try:
+                    if await iframe.is_visible():
+                        await iframe.scroll_into_view_if_needed()
+                        await asyncio.sleep(random.uniform(1, 2))
+                        # No hacer clic en iframes, solo asegurar que estén visibles
+                except Exception:
+                    continue
+                    
+        except Exception as e:
+            logger.error(f"Error interactuando con multimedia: {e}")
+    
+    async def simulate_extended_user_activity(self):
+        """Simular actividad de usuario prolongada"""
+        try:
+            # Movimientos de mouse más extensos
+            for _ in range(random.randint(5, 10)):
+                x = random.randint(100, 1800)
+                y = random.randint(100, 1000)
+                await self.page.mouse.move(x, y)
+                await asyncio.sleep(random.uniform(0.2, 0.5))
+            
+            # Simular lectura (pausas más largas)
+            await asyncio.sleep(random.uniform(3, 6))
+            
+            # Clicks aleatorios en áreas seguras
+            safe_areas = [
+                (200, 200), (500, 300), (800, 400), (1200, 500)
+            ]
+            
+            for x, y in random.sample(safe_areas, 2):
+                await self.page.mouse.click(x, y)
+                await asyncio.sleep(random.uniform(1, 2))
+                
+        except Exception as e:
+            logger.error(f"Error simulando actividad extendida: {e}")
+    
+    async def trigger_dynamic_content(self):
+        """Intentar activar contenido dinámico que pueda contener CAPTCHAs"""
+        try:
+            # Buscar botones de "Load More", "Show More", etc.
+            dynamic_triggers = [
+                'button:contains("Load")', 'button:contains("More")', 'button:contains("Show")',
+                'button:contains("Cargar")', 'button:contains("Más")', 'button:contains("Ver")',
+                '.load-more', '.show-more', '.expand', '.toggle'
+            ]
+            
+            for selector in dynamic_triggers:
+                try:
+                    elements = await self.page.query_selector_all(selector)
+                    for element in elements[:2]:
+                        if await element.is_visible():
+                            await element.scroll_into_view_if_needed()
+                            await asyncio.sleep(random.uniform(1, 2))
+                            await element.click()
+                            await asyncio.sleep(random.uniform(2, 4))
+                            
+                            # Verificar CAPTCHA después de cada activación
+                            if await self.detect_captcha():
+                                return
+                            break
+                except Exception:
+                    continue
+            
+            # Activar eventos de hover en elementos interactivos
+            interactive_elements = await self.page.query_selector_all('a, button, .clickable, [onclick]')
+            for element in random.sample(interactive_elements, min(5, len(interactive_elements))):
+                try:
+                    if await element.is_visible():
+                        await element.hover()
+                        await asyncio.sleep(random.uniform(0.5, 1))
+                except Exception:
+                    continue
+                    
+        except Exception as e:
+            logger.error(f"Error activando contenido dinámico: {e}")
+    
+    async def standard_page_interaction(self) -> bool:
+        """Interacción estándar con la página"""
+        try:
             # Buscar y hacer clic en botones comunes
             button_selectors = [
                 'button[type="submit"]',
@@ -148,7 +527,7 @@ class CaptchaCrawler:
             return False
             
         except Exception as e:
-            logger.error(f"Error interactuando con la página: {e}")
+            logger.error(f"Error en interacción estándar: {e}")
             return False
     
     async def get_page_links(self, base_url: str) -> List[str]:
@@ -332,12 +711,32 @@ class CaptchaCrawler:
             await asyncio.sleep(3)
             if not await self.detect_captcha():
                 self.captcha_solved = True
-                print("\n" + "="*60)
-                print("🎉 ¡CAPTCHA SUPERADO EXITOSAMENTE! 🎉")
-                print("="*60)
-                print(f"✅ URL: {url}")
-                print(f"✅ Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-                print("="*60 + "\n")
+                # Obtener título de la página
+                try:
+                    page_title = await self.page.title()
+                    if not page_title:
+                        page_title = "Página sin título"
+                except:
+                    page_title = "Título no disponible"
+                
+                # Crear recuadro visual de éxito
+                print("\n" + "█"*80)
+                print("█" + " "*78 + "█")
+                print("█" + "🎉 ¡CAPTCHA SUPERADO EXITOSAMENTE! 🎉".center(78) + "█")
+                print("█" + " "*78 + "█")
+                print("█" + "─"*78 + "█")
+                print("█" + " "*78 + "█")
+                print("█" + f"🌐 SITIO: {url}".ljust(78) + "█")
+                print("█" + " "*78 + "█")
+                print("█" + "📄 TÍTULO DE LA PÁGINA:".ljust(78) + "█")
+                # Dividir título largo en múltiples líneas si es necesario
+                title_lines = [page_title[i:i+70] for i in range(0, len(page_title), 70)]
+                for title_line in title_lines:
+                    print("█" + f"   {title_line}".ljust(78) + "█")
+                print("█" + " "*78 + "█")
+                print("█" + f"⏰ TIMESTAMP: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}".ljust(78) + "█")
+                print("█" + " "*78 + "█")
+                print("█"*80 + "\n")
                 logger.info("CAPTCHA superado exitosamente - OBJETIVO COMPLETADO")
                 return True
             else:
@@ -525,11 +924,16 @@ class CaptchaCrawler:
                         else:
                             print("❌ No se pudo superar el CAPTCHA, continuando búsqueda...")
                     
-                    # Si no hay CAPTCHA, interactuar con la página para activar posibles CAPTCHAs
+                    # Si no hay CAPTCHA, realizar navegación profunda
                     if not self.captcha_found:
-                        print("   🔄 Interactuando con elementos de la página...")
-                        if await self.interact_with_page():
-                            print(f"🎯 ¡CAPTCHA activado por interacción en: {current_url}!")
+                        print("   🔄 Realizando navegación profunda en la página...")
+                        
+                        # Pasar más tiempo explorando la página actual
+                        await self.deep_page_exploration(current_url)
+                        
+                        # Verificar CAPTCHA después de la exploración profunda
+                        if await self.detect_captcha():
+                            print(f"🎯 ¡CAPTCHA encontrado durante exploración profunda en: {current_url}!")
                             result['captcha_found'] = True
                             self.captcha_found = True
                             
@@ -539,7 +943,7 @@ class CaptchaCrawler:
                                 result['success'] = True
                                 return result  # Salir inmediatamente cuando se supere el CAPTCHA
                             else:
-                                print("❌ No se pudo superar el CAPTCHA activado, continuando búsqueda...")
+                                print("❌ No se pudo superar el CAPTCHA encontrado, continuando búsqueda...")
                     
                     # Si aún no hay CAPTCHA, obtener más enlaces para continuar navegando
                     if not self.captcha_found:
@@ -550,8 +954,8 @@ class CaptchaCrawler:
                         
                         print(f"   ➡️  Encontrados {len(new_links)} enlaces adicionales")
                     
-                    # Pausa entre páginas
-                    await asyncio.sleep(random.uniform(1, 3))
+                    # Pausa más larga entre páginas para simular navegación humana
+                    await asyncio.sleep(random.uniform(3, 6))
                 else:
                     print(f"   ❌ Error navegando a: {current_url}")
             
